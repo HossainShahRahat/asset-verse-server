@@ -29,7 +29,6 @@ async function run() {
     const requests = db.collection("requests");
     const team = db.collection("employeeAffiliations");
 
-    // --- Auth ---
     app.post("/jwt", async (req, res) => {
       const user = req.body;
       const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, {
@@ -52,7 +51,6 @@ async function run() {
       });
     };
 
-    // --- Users ---
     app.post("/users", async (req, res) => {
       const user = req.body;
       const query = { email: user.email };
@@ -83,7 +81,6 @@ async function run() {
       res.send(result);
     });
 
-    // --- Assets ---
     app.post("/assets", verifyToken, async (req, res) => {
       const info = req.body;
       const result = await assets.insertOne(info);
@@ -115,7 +112,13 @@ async function run() {
       res.send(result);
     });
 
-    // --- Requests ---
+    app.delete("/assets/:id", verifyToken, async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await assets.deleteOne(query);
+      res.send(result);
+    });
+
     app.post("/requests", verifyToken, async (req, res) => {
       const info = req.body;
       const result = await requests.insertOne(info);
@@ -145,7 +148,6 @@ async function run() {
       res.send(result);
     });
 
-    // --- CRITICAL UPDATE: Approval Logic with Limit Check ---
     app.patch("/requests/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
       const {
@@ -158,18 +160,15 @@ async function run() {
         companyLogo,
       } = req.body;
 
-      // 1. If Approving, CHECK LIMIT first
       if (status === "approved") {
         const hrUser = await users.findOne({ email: hrEmail });
         const currentTeamSize = await team.countDocuments({ hrEmail: hrEmail });
 
-        // Check if this employee is ALREADY in the team
         const existingMember = await team.findOne({
           employeeEmail: requesterEmail,
           hrEmail: hrEmail,
         });
 
-        // If not in team AND limit reached, BLOCK IT
         if (!existingMember && currentTeamSize >= hrUser.packageLimit) {
           return res.send({
             message: "limit reached",
@@ -179,12 +178,10 @@ async function run() {
         }
       }
 
-      // 2. Proceed with Update
       const filter = { _id: new ObjectId(id) };
       const doc = { $set: { status: status, actionDate: new Date() } };
       const result = await requests.updateOne(filter, doc);
 
-      // 3. Post-Update Actions
       if (status === "approved") {
         await assets.updateOne(
           { _id: new ObjectId(assetId) },
@@ -223,7 +220,6 @@ async function run() {
       res.send(result);
     });
 
-    // --- Team & Stats ---
     app.get("/my-team/:email", verifyToken, async (req, res) => {
       const email = req.params.email;
       const result = await team.find({ hrEmail: email }).toArray();
@@ -257,7 +253,6 @@ async function run() {
       res.send({ returnable, nonReturnable, pending, approved });
     });
 
-    // --- Public & Payment ---
     app.get("/packages", async (req, res) => {
       const packages = [
         {
@@ -305,7 +300,6 @@ async function run() {
       "Pinged your deployment. You successfully connected to MongoDB!"
     );
   } finally {
-    //
   }
 }
 run().catch(console.dir);
