@@ -8,7 +8,6 @@ const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 const app = express();
 const port = process.env.PORT || 5000;
 
-// Middleware
 app.use(cors());
 app.use(express.json());
 
@@ -30,7 +29,7 @@ async function run() {
     const requests = db.collection("requests");
     const team = db.collection("employeeAffiliations");
 
-    // --- JWT & Auth ---
+    // --- Auth ---
     app.post("/jwt", async (req, res) => {
       const user = req.body;
       const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, {
@@ -53,7 +52,7 @@ async function run() {
       });
     };
 
-    // --- User Routes ---
+    // --- Users ---
     app.post("/users", async (req, res) => {
       const user = req.body;
       const query = { email: user.email };
@@ -76,18 +75,15 @@ async function run() {
       res.send(result);
     });
 
-    // Upgrade Plan
     app.patch("/users/upgrade", verifyToken, async (req, res) => {
       const { email, limit, type } = req.body;
       const query = { email: email };
-      const doc = {
-        $set: { packageLimit: limit, subscription: type },
-      };
+      const doc = { $set: { packageLimit: limit, subscription: type } };
       const result = await users.updateOne(query, doc);
       res.send(result);
     });
 
-    // --- Asset Management (Search, Sort, Pagination) ---
+    // --- Assets ---
     app.post("/assets", verifyToken, async (req, res) => {
       const info = req.body;
       const result = await assets.insertOne(info);
@@ -119,7 +115,7 @@ async function run() {
       res.send(result);
     });
 
-    // --- Request Management ---
+    // --- Requests ---
     app.post("/requests", verifyToken, async (req, res) => {
       const info = req.body;
       const result = await requests.insertOne(info);
@@ -149,7 +145,7 @@ async function run() {
       res.send(result);
     });
 
-    // Handle Approvals & Returns
+    // --- CRITICAL UPDATE: Approval Logic with Limit Check ---
     app.patch("/requests/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
       const {
@@ -162,23 +158,45 @@ async function run() {
         companyLogo,
       } = req.body;
 
+      // 1. If Approving, CHECK LIMIT first
+      if (status === "approved") {
+        const hrUser = await users.findOne({ email: hrEmail });
+        const currentTeamSize = await team.countDocuments({ hrEmail: hrEmail });
+
+        // Check if this employee is ALREADY in the team
+        const existingMember = await team.findOne({
+          employeeEmail: requesterEmail,
+          hrEmail: hrEmail,
+        });
+
+        // If not in team AND limit reached, BLOCK IT
+        if (!existingMember && currentTeamSize >= hrUser.packageLimit) {
+          return res.send({
+            message: "limit reached",
+            insertedId: null,
+            modifiedCount: 0,
+          });
+        }
+      }
+
+      // 2. Proceed with Update
       const filter = { _id: new ObjectId(id) };
-      const doc = {
-        $set: { status: status, actionDate: new Date() },
-      };
+      const doc = { $set: { status: status, actionDate: new Date() } };
       const result = await requests.updateOne(filter, doc);
 
-      // If Approved: Deduct Stock & Add to Team
+      // 3. Post-Update Actions
       if (status === "approved") {
         await assets.updateOne(
           { _id: new ObjectId(assetId) },
           { $inc: { availableQuantity: -1 } }
         );
 
-        const teamQuery = { employeeEmail: requesterEmail, hrEmail: hrEmail };
-        const isMember = await team.findOne(teamQuery);
+        const existingMember = await team.findOne({
+          employeeEmail: requesterEmail,
+          hrEmail: hrEmail,
+        });
 
-        if (!isMember) {
+        if (!existingMember) {
           await team.insertOne({
             employeeEmail: requesterEmail,
             employeeName: requesterName,
@@ -195,7 +213,6 @@ async function run() {
         }
       }
 
-      // If Returned: Add Stock Back
       if (status === "returned") {
         await assets.updateOne(
           { _id: new ObjectId(assetId) },
@@ -221,7 +238,6 @@ async function run() {
 
     app.get("/hr-stats/:email", verifyToken, async (req, res) => {
       const email = req.params.email;
-
       const returnable = await assets.countDocuments({
         hrEmail: email,
         productType: "Returnable",
@@ -230,7 +246,6 @@ async function run() {
         hrEmail: email,
         productType: "Non-returnable",
       });
-
       const pending = await requests.countDocuments({
         hrEmail: email,
         status: "pending",
@@ -239,7 +254,6 @@ async function run() {
         hrEmail: email,
         status: "approved",
       });
-
       res.send({ returnable, nonReturnable, pending, approved });
     });
 
@@ -279,13 +293,11 @@ async function run() {
     app.post("/create-payment-intent", verifyToken, async (req, res) => {
       const { price } = req.body;
       const amount = parseInt(price * 100);
-
       const paymentIntent = await stripe.paymentIntents.create({
         amount: amount,
         currency: "usd",
         payment_method_types: ["card"],
       });
-
       res.send({ clientSecret: paymentIntent.client_secret });
     });
 
