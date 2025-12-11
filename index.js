@@ -132,11 +132,17 @@ async function run() {
       const limit = parseInt(req.query.limit) || 10;
 
       let query = {};
-      if (email) query.hrEmail = email;
+      if (email) {
+        query = {
+          $or: [{ hrEmail: email }, { requesterEmail: email }],
+        };
+      }
+
       if (search) {
         query.$or = [
           { requesterName: { $regex: search, $options: "i" } },
           { requesterEmail: { $regex: search, $options: "i" } },
+          { assetName: { $regex: search, $options: "i" } },
         ];
       }
 
@@ -145,6 +151,13 @@ async function run() {
         .skip(page * limit)
         .limit(limit)
         .toArray();
+      res.send(result);
+    });
+
+    app.delete("/requests/:id", verifyToken, async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await requests.deleteOne(query);
       res.send(result);
     });
 
@@ -163,7 +176,6 @@ async function run() {
       if (status === "approved") {
         const hrUser = await users.findOne({ email: hrEmail });
         const currentTeamSize = await team.countDocuments({ hrEmail: hrEmail });
-
         const existingMember = await team.findOne({
           employeeEmail: requesterEmail,
           hrEmail: hrEmail,
