@@ -8,6 +8,7 @@ const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 const app = express();
 const port = process.env.PORT || 5000;
 
+// Middleware
 app.use(cors());
 app.use(express.json());
 
@@ -29,6 +30,7 @@ async function run() {
     const requests = db.collection("requests");
     const team = db.collection("employeeAffiliations");
 
+    // --- JWT & Auth ---
     app.post("/jwt", async (req, res) => {
       const user = req.body;
       const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, {
@@ -51,6 +53,7 @@ async function run() {
       });
     };
 
+    // --- User Routes ---
     app.post("/users", async (req, res) => {
       const user = req.body;
       const query = { email: user.email };
@@ -73,41 +76,42 @@ async function run() {
       res.send(result);
     });
 
+    // Upgrade Plan
     app.patch("/users/upgrade", verifyToken, async (req, res) => {
       const { email, limit, type } = req.body;
-      const filter = { email: email };
-      const updateDoc = {
-        $set: {
-          packageLimit: limit,
-          subscription: type,
-        },
+      const query = { email: email };
+      const doc = {
+        $set: { packageLimit: limit, subscription: type },
       };
-      const result = await users.updateOne(filter, updateDoc);
+      const result = await users.updateOne(query, doc);
       res.send(result);
     });
 
+    // --- Asset Management (Search, Sort, Pagination) ---
     app.post("/assets", verifyToken, async (req, res) => {
-      const item = req.body;
-      const result = await assets.insertOne(item);
+      const info = req.body;
+      const result = await assets.insertOne(info);
       res.send(result);
     });
 
     app.get("/assets", verifyToken, async (req, res) => {
       const email = req.query.email;
       const search = req.query.search;
+      const sort = req.query.sort;
       const page = parseInt(req.query.page) || 0;
       const limit = parseInt(req.query.limit) || 10;
 
       let query = {};
-      if (email) {
-        query.hrEmail = email;
-      }
-      if (search) {
-        query.productName = { $regex: search, $options: "i" };
-      }
+      if (email) query.hrEmail = email;
+      if (search) query.productName = { $regex: search, $options: "i" };
+
+      let options = {};
+      if (sort === "asc") options = { productQuantity: 1 };
+      if (sort === "desc") options = { productQuantity: -1 };
 
       const result = await assets
         .find(query)
+        .sort(options)
         .skip(page * limit)
         .limit(limit)
         .toArray();
@@ -115,6 +119,7 @@ async function run() {
       res.send(result);
     });
 
+    // --- Request Management ---
     app.post("/requests", verifyToken, async (req, res) => {
       const info = req.body;
       const result = await requests.insertOne(info);
@@ -123,14 +128,28 @@ async function run() {
 
     app.get("/requests", verifyToken, async (req, res) => {
       const email = req.query.email;
+      const search = req.query.search;
+      const page = parseInt(req.query.page) || 0;
+      const limit = parseInt(req.query.limit) || 10;
+
       let query = {};
-      if (email) {
-        query = { hrEmail: email };
+      if (email) query.hrEmail = email;
+      if (search) {
+        query.$or = [
+          { requesterName: { $regex: search, $options: "i" } },
+          { requesterEmail: { $regex: search, $options: "i" } },
+        ];
       }
-      const result = await requests.find(query).toArray();
+
+      const result = await requests
+        .find(query)
+        .skip(page * limit)
+        .limit(limit)
+        .toArray();
       res.send(result);
     });
 
+    // Handle Approvals & Returns
     app.patch("/requests/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
       const {
@@ -143,25 +162,23 @@ async function run() {
         companyLogo,
       } = req.body;
 
-      const query = { _id: new ObjectId(id) };
-      const updateDoc = {
-        $set: { status: status, approvalDate: new Date() },
+      const filter = { _id: new ObjectId(id) };
+      const doc = {
+        $set: { status: status, actionDate: new Date() },
       };
-      const result = await requests.updateOne(query, updateDoc);
+      const result = await requests.updateOne(filter, doc);
 
+      // If Approved: Deduct Stock & Add to Team
       if (status === "approved") {
         await assets.updateOne(
           { _id: new ObjectId(assetId) },
           { $inc: { availableQuantity: -1 } }
         );
 
-        const teamQuery = {
-          employeeEmail: requesterEmail,
-          hrEmail: hrEmail,
-        };
-        const existingMember = await team.findOne(teamQuery);
+        const teamQuery = { employeeEmail: requesterEmail, hrEmail: hrEmail };
+        const isMember = await team.findOne(teamQuery);
 
-        if (!existingMember) {
+        if (!isMember) {
           await team.insertOne({
             employeeEmail: requesterEmail,
             employeeName: requesterName,
@@ -177,9 +194,19 @@ async function run() {
           );
         }
       }
+
+      // If Returned: Add Stock Back
+      if (status === "returned") {
+        await assets.updateOne(
+          { _id: new ObjectId(assetId) },
+          { $inc: { availableQuantity: 1 } }
+        );
+      }
+
       res.send(result);
     });
 
+    // --- Team & Stats ---
     app.get("/my-team/:email", verifyToken, async (req, res) => {
       const email = req.params.email;
       const result = await team.find({ hrEmail: email }).toArray();
@@ -192,8 +219,33 @@ async function run() {
       res.send(result);
     });
 
+    app.get("/hr-stats/:email", verifyToken, async (req, res) => {
+      const email = req.params.email;
+
+      const returnable = await assets.countDocuments({
+        hrEmail: email,
+        productType: "Returnable",
+      });
+      const nonReturnable = await assets.countDocuments({
+        hrEmail: email,
+        productType: "Non-returnable",
+      });
+
+      const pending = await requests.countDocuments({
+        hrEmail: email,
+        status: "pending",
+      });
+      const approved = await requests.countDocuments({
+        hrEmail: email,
+        status: "approved",
+      });
+
+      res.send({ returnable, nonReturnable, pending, approved });
+    });
+
+    // --- Public & Payment ---
     app.get("/packages", async (req, res) => {
-      const allPackages = [
+      const packages = [
         {
           name: "Basic",
           price: 5,
@@ -221,7 +273,7 @@ async function run() {
           ],
         },
       ];
-      res.send(allPackages);
+      res.send(packages);
     });
 
     app.post("/create-payment-intent", verifyToken, async (req, res) => {
@@ -234,15 +286,14 @@ async function run() {
         payment_method_types: ["card"],
       });
 
-      res.send({
-        clientSecret: paymentIntent.client_secret,
-      });
+      res.send({ clientSecret: paymentIntent.client_secret });
     });
 
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!"
     );
   } finally {
+    //
   }
 }
 run().catch(console.dir);
