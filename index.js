@@ -176,12 +176,12 @@ async function run() {
       if (status === "approved") {
         const hrUser = await users.findOne({ email: hrEmail });
         const currentTeamSize = await team.countDocuments({ hrEmail: hrEmail });
-        const existingMember = await team.findOne({
+        const isMember = await team.findOne({
           employeeEmail: requesterEmail,
           hrEmail: hrEmail,
         });
 
-        if (!existingMember && currentTeamSize >= hrUser.packageLimit) {
+        if (!isMember && currentTeamSize >= hrUser.packageLimit) {
           return res.send({
             message: "limit reached",
             insertedId: null,
@@ -200,12 +200,12 @@ async function run() {
           { $inc: { availableQuantity: -1 } }
         );
 
-        const existingMember = await team.findOne({
+        const isMember = await team.findOne({
           employeeEmail: requesterEmail,
           hrEmail: hrEmail,
         });
 
-        if (!existingMember) {
+        if (!isMember) {
           await team.insertOne({
             employeeEmail: requesterEmail,
             employeeName: requesterName,
@@ -234,8 +234,19 @@ async function run() {
 
     app.get("/my-team/:email", verifyToken, async (req, res) => {
       const email = req.params.email;
-      const result = await team.find({ hrEmail: email }).toArray();
-      res.send(result);
+
+      const asHr = await team.find({ hrEmail: email }).toArray();
+      if (asHr.length > 0) {
+        return res.send(asHr);
+      }
+
+      const asEmp = await team.findOne({ employeeEmail: email });
+      if (asEmp) {
+        const result = await team.find({ hrEmail: asEmp.hrEmail }).toArray();
+        return res.send(result);
+      }
+
+      res.send([]);
     });
 
     app.delete("/my-team/:id", verifyToken, async (req, res) => {
