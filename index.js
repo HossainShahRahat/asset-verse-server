@@ -27,6 +27,7 @@ async function run() {
     const users = db.collection("users");
     const assets = db.collection("assets");
     const requests = db.collection("requests");
+    const team = db.collection("employeeAffiliations");
 
     app.post("/jwt", async (req, res) => {
       const user = req.body;
@@ -66,6 +67,12 @@ async function run() {
       res.send(result);
     });
 
+    app.get("/user/:email", verifyToken, async (req, res) => {
+      const email = req.params.email;
+      const result = await users.findOne({ email });
+      res.send(result);
+    });
+
     app.patch("/users/upgrade", verifyToken, async (req, res) => {
       const { email, limit, type } = req.body;
       const filter = { email: email };
@@ -87,11 +94,24 @@ async function run() {
 
     app.get("/assets", verifyToken, async (req, res) => {
       const email = req.query.email;
+      const search = req.query.search;
+      const page = parseInt(req.query.page) || 0;
+      const limit = parseInt(req.query.limit) || 10;
+
       let query = {};
       if (email) {
-        query = { hrEmail: email };
+        query.hrEmail = email;
       }
-      const result = await assets.find(query).toArray();
+      if (search) {
+        query.productName = { $regex: search, $options: "i" };
+      }
+
+      const result = await assets
+        .find(query)
+        .skip(page * limit)
+        .limit(limit)
+        .toArray();
+
       res.send(result);
     });
 
@@ -113,12 +133,62 @@ async function run() {
 
     app.patch("/requests/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
-      const status = req.body.status;
+      const {
+        status,
+        assetId,
+        requesterEmail,
+        requesterName,
+        hrEmail,
+        companyName,
+        companyLogo,
+      } = req.body;
+
       const query = { _id: new ObjectId(id) };
       const updateDoc = {
-        $set: { status: status },
+        $set: { status: status, approvalDate: new Date() },
       };
       const result = await requests.updateOne(query, updateDoc);
+
+      if (status === "approved") {
+        await assets.updateOne(
+          { _id: new ObjectId(assetId) },
+          { $inc: { availableQuantity: -1 } }
+        );
+
+        const teamQuery = {
+          employeeEmail: requesterEmail,
+          hrEmail: hrEmail,
+        };
+        const existingMember = await team.findOne(teamQuery);
+
+        if (!existingMember) {
+          await team.insertOne({
+            employeeEmail: requesterEmail,
+            employeeName: requesterName,
+            hrEmail: hrEmail,
+            companyName: companyName,
+            companyLogo: companyLogo,
+            role: "employee",
+          });
+
+          await users.updateOne(
+            { email: requesterEmail },
+            { $set: { companyName: companyName, companyLogo: companyLogo } }
+          );
+        }
+      }
+      res.send(result);
+    });
+
+    app.get("/my-team/:email", verifyToken, async (req, res) => {
+      const email = req.params.email;
+      const result = await team.find({ hrEmail: email }).toArray();
+      res.send(result);
+    });
+
+    app.delete("/my-team/:id", verifyToken, async (req, res) => {
+      const id = req.params.id;
+      const result = await team.deleteOne({ _id: new ObjectId(id) });
       res.send(result);
     });
 
