@@ -319,7 +319,7 @@ async function run() {
       const email = req.params.email;
       const pipeline = [
         {
-          $match: { hrEmail: email, status: "approved" },
+          $match: { hrEmail: email },
         },
         {
           $group: {
