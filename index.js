@@ -11,7 +11,39 @@ const port = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
-const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.swu9d.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
+app.get("/packages", (req, res) => {
+  const packages = [
+    {
+      name: "Basic",
+      price: 5,
+      employeeLimit: 5,
+      features: ["Asset Tracking", "Employee Management", "Basic Support"],
+    },
+    {
+      name: "Standard",
+      price: 8,
+      employeeLimit: 10,
+      features: [
+        "All Basic features",
+        "Advanced Analytics",
+        "Priority Support",
+      ],
+    },
+    {
+      name: "Premium",
+      price: 15,
+      employeeLimit: 20,
+      features: ["All Standard features", "Custom Branding", "24/7 Support"],
+    },
+  ];
+  res.send(packages);
+});
+
+app.get("/", (req, res) => {
+  res.send("AssetVerse is sitting");
+});
+
+const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@asset-verse.dgmtq55.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
 const client = new MongoClient(uri, {
   serverApi: {
@@ -23,6 +55,8 @@ const client = new MongoClient(uri, {
 
 async function run() {
   try {
+    await client.connect();
+
     const db = client.db("assetVerse");
     const users = db.collection("users");
     const assets = db.collection("assets");
@@ -154,6 +188,11 @@ async function run() {
       res.send(result);
     });
 
+    app.get("/all-requests", verifyToken, async (req, res) => {
+      const result = await requests.find().toArray();
+      res.send(result);
+    });
+
     app.delete("/requests/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
@@ -276,36 +315,27 @@ async function run() {
       res.send({ returnable, nonReturnable, pending, approved });
     });
 
-    app.get("/packages", async (req, res) => {
-      const packages = [
+    app.get("/top-requests/:email", verifyToken, async (req, res) => {
+      const email = req.params.email;
+      const pipeline = [
         {
-          name: "Basic",
-          price: 5,
-          employeeLimit: 5,
-          features: ["Asset Tracking", "Employee Management", "Basic Support"],
+          $match: { hrEmail: email, status: "approved" },
         },
         {
-          name: "Standard",
-          price: 8,
-          employeeLimit: 10,
-          features: [
-            "All Basic features",
-            "Advanced Analytics",
-            "Priority Support",
-          ],
+          $group: {
+            _id: "$assetName",
+            count: { $sum: 1 },
+          },
         },
         {
-          name: "Premium",
-          price: 15,
-          employeeLimit: 20,
-          features: [
-            "All Standard features",
-            "Custom Branding",
-            "24/7 Support",
-          ],
+          $sort: { count: -1 },
+        },
+        {
+          $limit: 5,
         },
       ];
-      res.send(packages);
+      const result = await requests.aggregate(pipeline).toArray();
+      res.send(result);
     });
 
     app.post("/create-payment-intent", verifyToken, async (req, res) => {
@@ -319,18 +349,11 @@ async function run() {
       res.send({ clientSecret: paymentIntent.client_secret });
     });
 
-    console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!"
-    );
-  } finally {
+    app.listen(port, () => {
+      console.log(`AssetVerse is sitting on port ${port}`);
+    });
+  } catch (error) {
+    console.error(error);
   }
 }
 run().catch(console.dir);
-
-app.get("/", (req, res) => {
-  res.send("AssetVerse is sitting");
-});
-
-app.listen(port, () => {
-  console.log(`AssetVerse is sitting on port ${port}`);
-});
