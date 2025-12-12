@@ -196,8 +196,9 @@ async function run() {
       res.send(result);
     });
 
-    app.get("/all-requests", verifyToken, async (req, res) => {
-      const result = await requests.find().toArray();
+    app.get("/hr-requests/:email", verifyToken, async (req, res) => {
+      const hrEmail = req.params.email;
+      const result = await requests.find({ hrEmail: hrEmail }).toArray();
       res.send(result);
     });
 
