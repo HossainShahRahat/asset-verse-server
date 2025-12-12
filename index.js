@@ -107,6 +107,14 @@ async function run() {
       res.send(result);
     });
 
+    app.patch("/users/profile/:email", verifyToken, async (req, res) => {
+      const email = req.params.email;
+      const { name, photoURL } = req.body;
+      const doc = { $set: { displayName: name, photoURL: photoURL } };
+      const result = await users.updateOne({ email: email }, doc);
+      res.send(result);
+    });
+
     app.patch("/users/upgrade", verifyToken, async (req, res) => {
       const { email, limit, type } = req.body;
       const query = { email: email };
@@ -212,6 +220,16 @@ async function run() {
         companyLogo,
       } = req.body;
 
+      const hrManagerEmail = req.decoded.email;
+
+      const requestToUpdate = await requests.findOne({ _id: new ObjectId(id) });
+
+      if (!requestToUpdate || requestToUpdate.hrEmail !== hrManagerEmail) {
+        return res
+          .status(403)
+          .send({ message: "Forbidden: You do not own this request." });
+      }
+
       if (status === "approved") {
         const hrUser = await users.findOne({ email: hrEmail });
         const currentTeamSize = await team.countDocuments({ hrEmail: hrEmail });
@@ -221,7 +239,7 @@ async function run() {
         });
 
         if (!isMember && currentTeamSize >= hrUser.packageLimit) {
-          return res.send({
+          return res.status(403).send({
             message: "limit reached",
             insertedId: null,
             modifiedCount: 0,
