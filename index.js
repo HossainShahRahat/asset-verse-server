@@ -204,6 +204,23 @@ async function run() {
 
     app.delete("/requests/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
+      const userEmail = req.decoded.email;
+
+      const requestToDelete = await requests.findOne({ _id: new ObjectId(id) });
+
+      if (!requestToDelete) {
+        return res.status(404).send({ message: "Request not found" });
+      }
+
+      const isHr = requestToDelete.hrEmail === userEmail;
+      const isRequester = requestToDelete.requesterEmail === userEmail;
+
+      if (!isHr && !isRequester) {
+        return res.status(403).send({
+          message: "Forbidden: You are not authorized to delete this request.",
+        });
+      }
+
       const query = { _id: new ObjectId(id) };
       const result = await requests.deleteOne(query);
       res.send(result);
@@ -221,14 +238,26 @@ async function run() {
         companyLogo,
       } = req.body;
 
-      const hrManagerEmail = req.decoded.email;
-
+      const userEmail = req.decoded.email;
       const requestToUpdate = await requests.findOne({ _id: new ObjectId(id) });
 
-      if (!requestToUpdate || requestToUpdate.hrEmail !== hrManagerEmail) {
+      if (!requestToUpdate) {
+        return res.status(404).send({ message: "Request not found" });
+      }
+
+      const isHrOwner = requestToUpdate.hrEmail === userEmail;
+      const isRequester = requestToUpdate.requesterEmail === userEmail;
+
+      if (!isHrOwner && !isRequester) {
         return res
           .status(403)
           .send({ message: "Forbidden: You do not own this request." });
+      }
+
+      if (isRequester && !isHrOwner && status !== "returned") {
+        return res
+          .status(403)
+          .send({ message: "Forbidden: Employees can only return assets." });
       }
 
       if (status === "approved") {
