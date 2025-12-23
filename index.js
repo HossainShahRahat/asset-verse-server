@@ -8,7 +8,16 @@ const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 const app = express();
 const port = process.env.PORT || 5000;
 
-app.use(cors());
+const liveLink = process.env.Live_Link
+  ? process.env.Live_Link.replace(/\/$/, "")
+  : "";
+
+app.use(
+  cors({
+    origin: ["http://localhost:5173", liveLink],
+    credentials: true,
+  })
+);
 app.use(express.json());
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@asset-verse.dgmtq55.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
@@ -90,6 +99,12 @@ app.post("/users", async (req, res) => {
   if (isExist) {
     return res.send({ message: "user already exists", insertedId: null });
   }
+
+  if (user.role === "hr" || user.role === "Hr") {
+    user.packageLimit = 5;
+    user.subscription = "Basic";
+  }
+
   const result = await users.insertOne(user);
   res.send(result);
 });
